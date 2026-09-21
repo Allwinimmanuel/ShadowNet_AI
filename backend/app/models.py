@@ -8,7 +8,17 @@ class User(Base):
     user_id = Column(String, unique=True, index=True)
     username = Column(String, unique=True, index=True)
     password_hash = Column(String)
+    role = Column(String, default="USER") # USER or ADMIN
     status = Column(String, default="ACTIVE")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    action = Column(String)
+    target_entity = Column(String)
+    admin_id = Column(String)
+    description = Column(String)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class LoginAttempt(Base):
@@ -25,11 +35,12 @@ class LoginAttempt(Base):
     successful_login = Column(Boolean, default=False)
     failed_attempts = Column(Integer, default=0)
     risk_score = Column(Float, default=0.0)
+    model_confidence = Column(Float, nullable=True)
     risk_level = Column(String)
     prediction = Column(String) # NORMAL or SUSPICIOUS
     attack_type = Column(String)
     action_taken = Column(String) # ALLOW_LOGIN, BLOCK_AND_VERIFY, etc.
-    failure_reason = Column(String, nullable=True)
+    explanation = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 class UserLoginPattern(Base):
@@ -51,9 +62,11 @@ class SecurityIncident(Base):
     severity = Column(String) # LOW, MEDIUM, HIGH, CRITICAL
     description = Column(String)
     prevention_action = Column(String)
-    status = Column(String, default="OPEN") # OPEN, RESOLVED
+    status = Column(String, default="OPEN") # OPEN, INVESTIGATING, RESOLVED
     resolved = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    resolved_timestamp = Column(DateTime(timezone=True), nullable=True)
 
 class BlockedIP(Base):
     __tablename__ = "blocked_ips"

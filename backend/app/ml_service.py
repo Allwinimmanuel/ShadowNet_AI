@@ -82,9 +82,9 @@ def analyze_login(request_data: dict):
     # Clamp the final score
     risk_score = max(0, min(100, risk_score))
 
-    # Add a small base risk for normal logins if it's strictly 0
+    # No artificial base risk padding needed
     if risk_score == 0 and prediction_label == "NORMAL":
-        risk_score = 5.0
+        risk_score = 0.0
 
     return {
         "prediction": prediction_label,

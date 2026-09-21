@@ -19,12 +19,20 @@ const SEV_STYLE = {
   LOW:      'bg-blue-900/40 text-blue-300 border-blue-700',
 };
 
-const ACTION_STYLE = {
-  ALLOW_LOGIN:      'text-green-400',
-  DENY_CREDENTIALS: 'text-yellow-400',
-  LOCK_ACCOUNT:     'text-red-400',
-  BLOCK_IP:         'text-red-400',
-  BLOCK_AND_VERIFY: 'text-orange-400',
+const ACTION_CONFIG = {
+  ALLOW_LOGIN: { label: 'Allowed', cls: 'bg-green-900/40 text-green-300 border-green-700' },
+  DENY_CREDENTIALS: { label: 'Denied', cls: 'bg-yellow-900/40 text-yellow-300 border-yellow-700' },
+  FLAG_SUSPICIOUS: { label: 'Flagged', cls: 'bg-orange-900/40 text-orange-300 border-orange-700' },
+  LOCK_ACCOUNT: { label: 'Account Locked', cls: 'bg-red-900/40 text-red-300 border-red-700' },
+  BLOCK_IP: { label: 'IP Blocked', cls: 'bg-red-900/40 text-red-300 border-red-700' },
+  BLOCK_AND_VERIFY: { label: 'Blocked / Verify', cls: 'bg-red-900/40 text-red-300 border-red-700' },
+};
+
+const Badge = ({ cfg, value }) => {
+  const c = cfg[value];
+  return c
+    ? <span className={`px-2 py-0.5 rounded text-xs font-semibold border ${c.cls}`}>{c.label}</span>
+    : <span className="px-2 py-0.5 rounded text-xs border bg-slate-800 text-slate-400 border-slate-700">{value || '—'}</span>;
 };
 
 // ── Anomaly Card ─────────────────────────────────────────────────────────
@@ -148,8 +156,8 @@ const UserDetail = ({ userId, onClose }) => {
                 <tr key={ev.id} className={ev.anomaly_score >= 30 ? 'bg-orange-950/20' : ''}>
                   <td className="py-1.5 pr-3 font-mono whitespace-nowrap text-slate-400">{fmt(ev.timestamp)}</td>
                   <td className="py-1.5 pr-3 font-mono text-slate-300">{ev.ip_address}</td>
-                  <td className={`py-1.5 pr-3 font-semibold ${ACTION_STYLE[ev.action_taken] || 'text-slate-400'}`}>
-                    {ev.action_taken}
+                  <td className="py-1.5 pr-3">
+                    <Badge cfg={ACTION_CONFIG} value={ev.action_taken} />
                   </td>
                   <td className="py-1.5 pr-3 text-slate-300">{ev.risk_score}%</td>
                   <td className="py-1.5">

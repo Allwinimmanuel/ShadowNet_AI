@@ -10,7 +10,6 @@ const NAV_SECTIONS = [
   {
     label: 'Monitoring',
     items: [
-      { to: '/login',      icon: LogIn,        label: 'Login Page' },
       { to: '/',           icon: Activity,     label: 'Security Overview', exact: true },
       { to: '/monitor',    icon: Monitor,      label: 'Live Monitor' },
       { to: '/history',    icon: List,         label: 'Login History' },
@@ -25,7 +24,7 @@ const NAV_SECTIONS = [
     ],
   },
   {
-    label: 'Threat Modules',
+    label: 'Future Extensions',
     items: [
       { to: '/phishing',    icon: Mail,        label: 'Phishing Analyzer' },
       { to: '/ransomware',  icon: AlertTriangle, label: 'Ransomware Monitor' },
@@ -35,9 +34,19 @@ const NAV_SECTIONS = [
     label: 'Response',
     items: [
       { to: '/incidents',   icon: AlertOctagon, label: 'Incidents' },
+      { to: '/alerts',      icon: Shield,       label: 'Alert Center' },
       { to: '/prevention',  icon: Lock,         label: 'Prevention Center' },
       { to: '/simulator',   icon: Shield,       label: 'Security Simulator' },
       { to: '/status',      icon: Server,       label: 'API Status' },
+    ],
+  },
+  {
+    label: 'Administration',
+    items: [
+      { to: '/audit',             icon: List,        label: 'Audit Logs' },
+      { to: '/model-evaluation',  icon: Activity,    label: 'Model Evaluation' },
+      { to: '/reports',           icon: Mail,        label: 'Reports & Exports' },
+      { to: '/demo',              icon: Shield,      label: 'Demo Manager' },
     ],
   },
 ];
@@ -92,8 +101,22 @@ const Layout = () => {
 
         {/* Footer */}
         <div className="p-4 border-t border-slate-700 text-xs text-slate-500 sticky bottom-0 bg-slate-800">
-          <p className="font-medium text-slate-400">ShadowNet AI v2.0</p>
-          <p>Predict → Explain → Respond</p>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="font-medium text-slate-400">ShadowNet AI v2.0</p>
+              <p>Predict → Explain → Respond</p>
+            </div>
+            <button 
+              onClick={() => {
+                localStorage.removeItem('token');
+                window.location.href = '/login';
+              }}
+              title="Logout"
+              className="p-2 bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white rounded-lg transition-colors"
+            >
+              <LogIn className="w-4 h-4 rotate-180" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -119,7 +142,7 @@ const NavItem = ({ to, icon: Icon, label, exact }) => (
       }`
     }
   >
-    <Icon className="w-4 h-4 flex-shrink-0" />
+    {Icon ? <Icon className="w-4 h-4 flex-shrink-0" /> : <div className="w-4 h-4 flex-shrink-0 bg-slate-700 rounded-sm" />}
     <span>{label}</span>
   </NavLink>
 );

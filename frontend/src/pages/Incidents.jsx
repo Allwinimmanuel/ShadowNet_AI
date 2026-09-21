@@ -14,11 +14,12 @@ const SEVERITY_CONFIG = {
 };
 
 const ACTION_LABEL = {
-  LOCK_ACCOUNT: 'Lock Account',
+  ACCOUNT_LOCKED: 'Account Locked',
   BLOCK_IP:     'Block IP',
-  BLOCK_AND_VERIFY: 'Block & Verify',
-  DENY_CREDENTIALS: 'Deny Credentials',
-  ALLOW_LOGIN:  'Allow Login',
+  BLOCKED_AND_DENIED: 'Blocked & Denied',
+  DENIED: 'Denied',
+  ALLOWED:  'Allowed',
+  FLAG_SUSPICIOUS: 'Flagged Suspicious'
 };
 
 const Incidents = () => {
@@ -44,7 +45,7 @@ const Incidents = () => {
 
   useEffect(() => {
     fetchIncidents();
-    const interval = setInterval(fetchIncidents, 15000);
+    const interval = setInterval(fetchIncidents, 10000);
     return () => clearInterval(interval);
   }, [fetchIncidents]);
 

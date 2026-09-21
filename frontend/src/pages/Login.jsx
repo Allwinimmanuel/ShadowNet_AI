@@ -25,11 +25,18 @@ const Login = () => {
         password
       });
       
-      if (res.data.status === 'success') {
-        setMessage('Login successful.');
+      if (res.data.success && res.data.token) {
+        localStorage.setItem('token', res.data.token);
+        setMessage(res.data.message || 'Login successful.');
         setMessageType('success');
-        // Optionally navigate to dashboard after successful login
-        // setTimeout(() => navigate('/'), 1500);
+        // Navigate to dashboard after successful login
+        setTimeout(() => navigate('/'), 1500);
+      } else if (res.data.success) {
+        setMessage(res.data.message || 'Login successful, but further verification required.');
+        setMessageType('error');
+      } else {
+        setMessage(res.data.message || 'Login failed.');
+        setMessageType('error');
       }
     } catch (err) {
       if (err.response) {

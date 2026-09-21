@@ -42,10 +42,26 @@ const SecurityOverview = () => {
   const [error, setError]     = useState(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
+  const [timeRange, setTimeRange] = useState('all');
 
   const fetchSummary = useCallback(async () => {
     try {
-      const data = await dashboardAPI.getSummary();
+      let start_date = null;
+      let end_date = null;
+      
+      if (timeRange !== 'all') {
+        const now = new Date();
+        const start = new Date();
+        if (timeRange === '1h') start.setHours(start.getHours() - 1);
+        if (timeRange === '24h') start.setHours(start.getHours() - 24);
+        if (timeRange === '7d') start.setDate(start.getDate() - 7);
+        if (timeRange === '30d') start.setDate(start.getDate() - 30);
+        
+        start_date = start.toISOString();
+        end_date = now.toISOString();
+      }
+
+      const data = await dashboardAPI.getSummary(start_date, end_date);
       setSummary(data);
       setLastRefresh(new Date());
       setError(null);
@@ -54,11 +70,11 @@ const SecurityOverview = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [timeRange]);
 
   useEffect(() => {
     fetchSummary();
-    const interval = setInterval(fetchSummary, 10000); // refresh every 10 s
+    const interval = setInterval(fetchSummary, 5000); // refresh every 5 s
     return () => clearInterval(interval);
   }, [fetchSummary]);
 
@@ -75,21 +91,21 @@ const SecurityOverview = () => {
 
   // ── Chart data ──────────────────────────────────────────────────────
   const pieData = [
-    { name: 'Normal',     value: summary?.normal_logins   || 0, color: '#22c55e' },
-    { name: 'Suspicious', value: summary?.suspicious_logins || 0, color: '#f97316' },
-    { name: 'Blocked',    value: summary?.blocked_attempts  || 0, color: '#ef4444' },
+    { name: 'Normal',     value: summary?.allowed_logins   || 0, color: '#22c55e' },
+    { name: 'Suspicious', value: summary?.suspicious_activity || 0, color: '#f97316' },
+    { name: 'Blocked',    value: summary?.blocked_logins  || 0, color: '#ef4444' },
   ];
 
   const barData = [
     { name: 'Total',      count: summary?.total_attempts    || 0, fill: '#3b82f6' },
-    { name: 'Normal',     count: summary?.normal_logins     || 0, fill: '#22c55e' },
-    { name: 'Suspicious', count: summary?.suspicious_logins || 0, fill: '#f97316' },
-    { name: 'Blocked',    count: summary?.blocked_attempts  || 0, fill: '#ef4444' },
+    { name: 'Normal',     count: summary?.allowed_logins     || 0, fill: '#22c55e' },
+    { name: 'Suspicious', count: summary?.suspicious_activity || 0, fill: '#f97316' },
+    { name: 'Blocked',    count: summary?.blocked_logins  || 0, fill: '#ef4444' },
     { name: 'Incidents',  count: summary?.active_incidents  || 0, fill: '#eab308' },
   ];
 
   const safeRate = summary?.total_attempts
-    ? ((summary.normal_logins / summary.total_attempts) * 100).toFixed(1)
+    ? ((summary.allowed_logins / summary.total_attempts) * 100).toFixed(1)
     : '0';
 
   return (
@@ -104,6 +120,17 @@ const SecurityOverview = () => {
           <p className="text-slate-500 text-sm mt-0.5">Live security statistics · auto-refreshes every 10 s</p>
         </div>
         <div className="flex items-center gap-4">
+          <select 
+            value={timeRange} 
+            onChange={(e) => setTimeRange(e.target.value)}
+            className="bg-slate-700 text-sm text-slate-300 border-none rounded-lg p-2 focus:ring-1 focus:ring-blue-500"
+          >
+            <option value="1h">Last 1 Hour</option>
+            <option value="24h">Last 24 Hours</option>
+            <option value="7d">Last 7 Days</option>
+            <option value="30d">Last 30 Days</option>
+            <option value="all">All Time</option>
+          </select>
           <LiveClock />
           <button
             onClick={fetchSummary}
@@ -127,7 +154,7 @@ const SecurityOverview = () => {
         />
         <StatCard
           title="Blocked Logins"
-          value={summary?.blocked_attempts}
+          value={summary?.blocked_logins}
           icon={<UserX className="text-red-400 w-7 h-7" />}
           borderColor="border-l-red-500"
           bgColor="bg-red-900/20"
@@ -135,7 +162,7 @@ const SecurityOverview = () => {
         />
         <StatCard
           title="Suspicious Activity"
-          value={summary?.suspicious_logins}
+          value={summary?.suspicious_activity}
           icon={<ShieldAlert className="text-orange-400 w-7 h-7" />}
           borderColor="border-l-orange-500"
           bgColor="bg-orange-900/20"
@@ -151,13 +178,12 @@ const SecurityOverview = () => {
         />
       </div>
 
-      {/* ── Legend ── */}
       <div className="flex flex-wrap gap-4 text-xs text-slate-400">
         {[
           { color: 'bg-blue-500',   label: 'Total Attempts   — all login events recorded' },
-          { color: 'bg-green-500',  label: 'Normal           — NORMAL prediction + ALLOW_LOGIN' },
+          { color: 'bg-green-500',  label: 'Normal           — NORMAL prediction + ALLOWED' },
           { color: 'bg-orange-500', label: 'Suspicious       — SUSPICIOUS prediction but not hard-blocked (e.g. wrong password)' },
-          { color: 'bg-red-500',    label: 'Blocked          — BLOCK_IP / LOCK_ACCOUNT / BLOCK_AND_VERIFY' },
+          { color: 'bg-red-500',    label: 'Blocked          — BLOCK_IP / ACCOUNT_LOCKED / BLOCKED_AND_DENIED' },
           { color: 'bg-yellow-500', label: 'Active Incidents — OPEN security incidents needing resolution' },
         ].map(({ color, label }) => (
           <span key={label} className="flex items-center gap-1.5">

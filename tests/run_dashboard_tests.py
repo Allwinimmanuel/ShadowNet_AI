@@ -5,6 +5,7 @@ import requests
 import pandas as pd
 import json
 from pathlib import Path
+# pyrefly: ignore [missing-import]
 from dashboard.utils import check_health, predict_single, predict_batch, get_feature_schema
 
 def get_valid_record():
@@ -25,8 +26,11 @@ def run_tests():
     
     # Test Imports
     try:
+        # pyrefly: ignore [missing-import]
         import dashboard.app
+        # pyrefly: ignore [missing-import]
         import dashboard.components
+        # pyrefly: ignore [missing-import]
         import dashboard.utils
         output.append("PASS - Dashboard imports successfully.")
     except Exception as e:

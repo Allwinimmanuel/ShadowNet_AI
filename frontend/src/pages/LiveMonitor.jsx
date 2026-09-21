@@ -14,24 +14,28 @@ const formatTime = (iso) => {
 };
 
 const ACTION_CONFIG = {
-  ALLOW_LOGIN:      { label: 'Allowed',               cls: 'bg-green-900/40 text-green-300 border-green-700'  },
-  DENY_CREDENTIALS: { label: 'Denied',                cls: 'bg-yellow-900/40 text-yellow-300 border-yellow-700' },
-  LOCK_ACCOUNT:     { label: 'Account Locked',        cls: 'bg-red-900/40 text-red-300 border-red-700'        },
-  BLOCK_IP:         { label: 'IP Blocked',            cls: 'bg-red-900/40 text-red-300 border-red-700'        },
-  BLOCK_AND_VERIFY: { label: 'Blocked / Verify',      cls: 'bg-red-900/40 text-red-300 border-red-700'        },
+  ALLOWED: { label: 'Allowed', cls: 'bg-green-900/40 text-green-300 border-green-700' },
+  DENIED: { label: 'Denied', cls: 'bg-yellow-900/40 text-yellow-300 border-yellow-700' },
+  FLAG_SUSPICIOUS: { label: 'Flagged', cls: 'bg-orange-900/40 text-orange-300 border-orange-700' },
+  ACCOUNT_LOCKED: { label: 'Account Locked', cls: 'bg-red-900/40 text-red-300 border-red-700' },
+  BLOCK_IP: { label: 'IP Blocked', cls: 'bg-red-900/40 text-red-300 border-red-700' },
+  BLOCKED_AND_DENIED: { label: 'Blocked / Denied', cls: 'bg-red-900/40 text-red-300 border-red-700' },
 };
 
 const PREDICTION_CONFIG = {
-  NORMAL:    { label: 'NORMAL',     cls: 'bg-green-900/40 text-green-300 border-green-700'   },
-  SUSPICIOUS:{ label: 'SUSPICIOUS', cls: 'bg-orange-900/40 text-orange-300 border-orange-700' },
+  NORMAL: { label: 'NORMAL', cls: 'bg-green-900/40 text-green-300 border-green-700' },
+  SUSPICIOUS: { label: 'SUSPICIOUS', cls: 'bg-orange-900/40 text-orange-300 border-orange-700' },
+  BRUTE_FORCE: { label: 'BRUTE_FORCE', cls: 'bg-red-900/40 text-red-300 border-red-700' },
+  BLOCKED_IP: { label: 'BLOCKED_IP', cls: 'bg-red-900/40 text-red-300 border-red-700' },
 };
 
 const ROW_BG = {
-  ALLOW_LOGIN:      '',
-  DENY_CREDENTIALS: 'bg-yellow-950/10',
-  LOCK_ACCOUNT:     'bg-red-950/20',
-  BLOCK_IP:         'bg-red-950/20',
-  BLOCK_AND_VERIFY: 'bg-red-950/20',
+  ALLOWED: '',
+  DENIED: 'bg-yellow-950/10',
+  FLAG_SUSPICIOUS: 'bg-orange-950/10',
+  ACCOUNT_LOCKED: 'bg-red-950/20',
+  BLOCK_IP: 'bg-red-950/20',
+  BLOCKED_AND_DENIED: 'bg-red-950/20',
 };
 
 const Badge = ({ cfg, value }) => {
@@ -54,7 +58,7 @@ const LiveClock = () => {
 // ── Main ─────────────────────────────────────────────────────────────────
 const LiveMonitor = () => {
   const [attempts, setAttempts] = useState([]);
-  const [loading,  setLoading]  = useState(true);
+  const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
   const [newIds, setNewIds] = useState(new Set());
 
@@ -81,13 +85,13 @@ const LiveMonitor = () => {
 
   useEffect(() => {
     fetchAttempts();
-    const interval = setInterval(fetchAttempts, 5000);
+    const interval = setInterval(fetchAttempts, 3000);
     return () => clearInterval(interval);
   }, [fetchAttempts]);
 
-  const blocked    = attempts.filter(a => ['LOCK_ACCOUNT','BLOCK_IP','BLOCK_AND_VERIFY'].includes(a.action_taken)).length;
-  const suspicious = attempts.filter(a => a.prediction === 'SUSPICIOUS' && a.action_taken === 'DENY_CREDENTIALS').length;
-  const allowed    = attempts.filter(a => a.action_taken === 'ALLOW_LOGIN').length;
+  const blocked = attempts.filter(a => ['ACCOUNT_LOCKED', 'BLOCK_IP', 'BLOCKED_AND_DENIED'].includes(a.action_taken)).length;
+  const suspicious = attempts.filter(a => a.prediction === 'SUSPICIOUS' && !['ACCOUNT_LOCKED', 'BLOCK_IP', 'BLOCKED_AND_DENIED'].includes(a.action_taken)).length;
+  const allowed = attempts.filter(a => a.action_taken === 'ALLOWED').length;
 
   return (
     <div className="space-y-5">
@@ -116,9 +120,9 @@ const LiveMonitor = () => {
       {/* Quick stats */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { label: 'Allowed',    value: allowed,    cls: 'border-green-700 bg-green-900/10',  text: 'text-green-400'  },
+          { label: 'Allowed', value: allowed, cls: 'border-green-700 bg-green-900/10', text: 'text-green-400' },
           { label: 'Suspicious', value: suspicious, cls: 'border-orange-700 bg-orange-900/10', text: 'text-orange-400' },
-          { label: 'Blocked',    value: blocked,    cls: 'border-red-700 bg-red-900/10',      text: 'text-red-400'    },
+          { label: 'Blocked', value: blocked, cls: 'border-red-700 bg-red-900/10', text: 'text-red-400' },
         ].map(({ label, value, cls, text }) => (
           <div key={label} className={`${cls} border rounded-xl px-4 py-3 text-center`}>
             <p className={`text-2xl font-bold tabular-nums ${text}`}>{value}</p>
@@ -170,6 +174,23 @@ const LiveMonitor = () => {
                   <td className="px-4 py-3 text-xs text-slate-400">{a.device_type || '—'}</td>
                   <td className="px-4 py-3">
                     <Badge cfg={PREDICTION_CONFIG} value={a.prediction} />
+                    {a.explanation && (
+                      <div className="mt-1 text-xs text-slate-500 italic max-w-[150px] whitespace-normal break-words">
+                        {(() => {
+                          try {
+                            const reasons = JSON.parse(a.explanation);
+                            return reasons.length > 0 ? reasons.join(", ") : "Login behavior matches the user's usual pattern.";
+                          } catch (e) {
+                            return "Login behavior matches the user's usual pattern.";
+                          }
+                        })()}
+                      </div>
+                    )}
+                    {!a.explanation && a.prediction === "NORMAL" && (
+                      <div className="mt-1 text-xs text-slate-500 italic max-w-[150px] whitespace-normal break-words">
+                        Login behavior matches the user's usual pattern.
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-2">
@@ -194,7 +215,7 @@ const LiveMonitor = () => {
         </div>
         {lastRefresh && (
           <div className="px-4 py-2 bg-slate-900/40 border-t border-slate-700 text-xs text-slate-500 flex items-center gap-1">
-            <Clock className="w-3 h-3" /> Updated {lastRefresh.toLocaleTimeString()} · auto-refreshes every 5 s
+            <Clock className="w-3 h-3" /> Updated {lastRefresh.toLocaleTimeString()} · auto-refreshes every 3 s
           </div>
         )}
       </div>

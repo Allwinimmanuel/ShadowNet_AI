@@ -8,8 +8,10 @@ from typing import List
 from pydantic import BaseModel
 import datetime
 import bcrypt
-
-from . import models, schemas, database, prevention, ml_service, threat_intel, ueba, phishing
+import io
+import csv
+from fastapi.responses import StreamingResponse
+from . import models, schemas, database, prevention, ml_service, threat_intel, ueba, phishing, auth
 
 # Create tables
 models.Base.metadata.create_all(bind=database.engine)
@@ -63,123 +65,64 @@ def health_check(db: Session = Depends(get_db)):
 
 @app.post("/api/auth/login")
 def login(request_data: schemas.SimpleLoginRequest, req: Request, db: Session = Depends(get_db)):
-    ip = req.client.host if req.client else "127.0.0.1"
-    user_agent = req.headers.get("user-agent", "Unknown")
-    
-    # Simple browser/os parsing
-    browser = "Chrome" if "Chrome" in user_agent else ("Firefox" if "Firefox" in user_agent else "Unknown")
-    device = "Mobile" if "Mobile" in user_agent else "Desktop"
-    
     # 1. Fetch user
     user = db.query(models.User).filter(models.User.username == request_data.username).first()
     if not user:
-        # Prevent user enumeration, but ensure counters are distinct per username
-        user_id = request_data.username
-        email = f"{request_data.username}@demo.com"
-        password_valid = False
-    else:
-        user_id = user.user_id
-        email = f"{user.username}@demo.com"
-        password_valid = bcrypt.checkpw(request_data.password.encode('utf-8'), user.password_hash.encode('utf-8'))
+        return {"success": False, "message": "Invalid username or password."}
         
-    # Get previous attempts
-    time_limit = datetime.datetime.utcnow() - datetime.timedelta(minutes=5)
-    recent_attempts = db.query(models.LoginAttempt).filter(
-        models.LoginAttempt.user_id == user_id,
-        models.LoginAttempt.created_at >= time_limit
-    ).order_by(models.LoginAttempt.created_at.desc()).all()
+    password_valid = bcrypt.checkpw(request_data.password.encode('utf-8'), user.password_hash.encode('utf-8'))
     
-    # Calculate consecutive failed attempts since last successful login
-    failed_attempts = 0
-    for attempt in recent_attempts:
-        if attempt.successful_login:
-            break
-        failed_attempts += 1
-    
-    # Build complete request for ML
-    full_req = schemas.LoginRequest(
-        user_id=user_id,
-        email=email,
-        ip_address=ip,
-        device_type=device,
-        browser=browser,
-        location="Unknown",
-        login_hour=datetime.datetime.utcnow().hour,
-        day_of_week=datetime.datetime.utcnow().weekday(),
-        failed_attempts=failed_attempts,
-        login_frequency=len(recent_attempts) + 1,
-        is_new_ip=0, # Need history check in a real app
-        is_new_device=0,
-        location_changed=0
-    )
-    
-    # 1. Get ML Prediction
-    ml_result = ml_service.analyze_login(full_req.model_dump())
-    
-    # 2. Apply Prevention Rules
-    action, prediction, risk_score = prevention.evaluate_and_prevent(
-        db=db, 
-        request=full_req, 
-        prediction=ml_result["prediction"], 
-        risk_score=ml_result["risk_score"], 
-        reasons=ml_result["reasons"]
-    )
-    
-    # 3. Verify password
     if not password_valid:
-        risk_score = min(100.0, risk_score + 25.0)
+        return {"success": False, "message": "Invalid username or password."}
         
-    # 4. Store login attempt
-    db_attempt = models.LoginAttempt(
-        user_id=user_id,
-        ip_address=ip,
-        device_type=device,
-        browser=browser,
-        location="Unknown",
-        login_hour=datetime.datetime.utcnow().hour,
-        successful_login=password_valid and action not in ["BLOCK_IP", "LOCK_ACCOUNT"],
-        failed_attempts=failed_attempts + 1 if not password_valid else 0,
-        risk_score=risk_score,
-        prediction=prediction,
-        action_taken=action
-    )
-    db.add(db_attempt)
-    db.commit()
-    db.refresh(db_attempt)
-    
-    # Logging
-    print(f"LOGIN ATTEMPT -> username: {request_data.username}, failed_attempts: {failed_attempts}, prediction: {prediction}, action: {action}, account_locked: {action == 'LOCK_ACCOUNT'}, ip_blocked: {action == 'BLOCK_IP'}")
-    
-    if action == "BLOCK_IP":
-        raise HTTPException(status_code=403, detail="IP address is blocked.")
-    elif action == "LOCK_ACCOUNT":
-        raise HTTPException(status_code=403, detail="Account is temporarily locked.")
-    elif action == "BLOCK_AND_VERIFY":
-        raise HTTPException(status_code=403, detail="Login blocked for security reasons.")
-    elif not password_valid:
-        raise HTTPException(status_code=401, detail="Invalid username or password.")
-        
+    access_token = auth.create_access_token(data={"sub": user.username, "role": user.role})
+
     return {
-        "status": "success",
+        "success": True,
         "message": "Login successful.",
-        "user_id": user_id,
-        "prediction": prediction,
-        "risk_score": risk_score
+        "user_id": user.user_id,
+        "token": access_token
     }
 
 @app.post("/api/auth/analyze", response_model=schemas.PredictionResponse)
 def analyze_login(request: schemas.LoginRequest, db: Session = Depends(get_db)):
+    # Calculate consecutive failed attempts from history
+    time_limit = datetime.datetime.utcnow() - datetime.timedelta(minutes=15)
+    recent_attempts = db.query(models.LoginAttempt).filter(
+        models.LoginAttempt.user_id == request.user_id,
+        models.LoginAttempt.created_at >= time_limit
+    ).order_by(models.LoginAttempt.created_at.desc()).all()
+    
+    true_failed_attempts = 0
+    for attempt in recent_attempts:
+        if attempt.successful_login:
+            break
+        true_failed_attempts += 1
+        
+    # Override request failed attempts with the true historical count
+    request.failed_attempts = true_failed_attempts
+
     # 1. Get ML Prediction
     ml_result = ml_service.analyze_login(request.model_dump())
     
+    # Pre-adjust risk score for bad passwords BEFORE prevention engine
+    adjusted_risk_score = ml_result["risk_score"]
+    if not request.is_password_valid:
+        adjusted_risk_score = min(100.0, adjusted_risk_score + 25.0)
+        if "Invalid password" not in ml_result["reasons"]:
+            ml_result["reasons"].append("Invalid password")
+    
     # 2. Apply Prevention Rules
-    action, prediction, risk_score = prevention.evaluate_and_prevent(
+    action, prediction, risk_score, reasons = prevention.evaluate_and_prevent(
         db=db, 
         request=request, 
         prediction=ml_result["prediction"], 
-        risk_score=ml_result["risk_score"], 
+        risk_score=adjusted_risk_score, 
         reasons=ml_result["reasons"]
     )
+    
+    if not request.is_password_valid and action == "ALLOWED":
+        action = "DENIED"
     
     # 3. Store login attempt
     db_attempt = models.LoginAttempt(
@@ -189,11 +132,13 @@ def analyze_login(request: schemas.LoginRequest, db: Session = Depends(get_db)):
         browser=request.browser,
         location=request.location,
         login_hour=request.login_hour,
-        successful_login=(action == "ALLOW_LOGIN"),
+        successful_login=(request.is_password_valid and action == "ALLOWED"),
         failed_attempts=request.failed_attempts,
         risk_score=risk_score,
         prediction=prediction,
-        action_taken=action
+        action_taken=action,
+        explanation=json.dumps(reasons) if reasons else None,
+        model_confidence=ml_result.get("confidence")
     )
     db.add(db_attempt)
     db.commit()
@@ -207,49 +152,138 @@ def analyze_login(request: schemas.LoginRequest, db: Session = Depends(get_db)):
         recommended_action=action
     )
 
-@app.get("/api/dashboard/summary", response_model=schemas.DashboardSummaryResponse)
-def get_dashboard_summary(db: Session = Depends(get_db)):
-    BLOCKED_ACTIONS = ["BLOCK_IP", "LOCK_ACCOUNT"]
-    total = db.query(models.LoginAttempt).count()
+@app.post("/api/transactions/analyze")
+def analyze_transaction(request: dict, db: Session = Depends(get_db)):
+    """
+    Evaluates transaction risk based on amount, velocity, context, etc.
+    Returns LOW RISK, SUSPICIOUS, or HIGH RISK.
+    """
+    risk_score = 0.0
+    reasons = []
     
-    # Normal: action_taken == ALLOW_LOGIN
-    normal = db.query(models.LoginAttempt).filter(
-        models.LoginAttempt.action_taken == "ALLOW_LOGIN"
-    ).count()
+    amount = request.get("amount", 0)
+    failed_attempts = request.get("recent_failed_authentication_count", 0)
+    user_id = request.get("user_id", "Unknown")
     
-    # Suspicious: action_taken == FLAG_SUSPICIOUS
-    suspicious = db.query(models.LoginAttempt).filter(
-        models.LoginAttempt.action_taken == "FLAG_SUSPICIOUS"
-    ).count()
+    if amount > 10000:
+        risk_score += 40
+        reasons.append("Unusually high transaction amount")
+    if failed_attempts > 0:
+        risk_score += 30
+        reasons.append("Recent failed authentications")
+        
+    if risk_score >= 70:
+        decision = "HIGH RISK"
+        action = "BLOCKED"
+        severity = "HIGH"
+    elif risk_score >= 30:
+        decision = "SUSPICIOUS"
+        action = "HELD"
+        severity = "MEDIUM"
+    else:
+        decision = "LOW RISK"
+        action = "ALLOWED"
+        severity = None
+        
+    # Generate a mock security decision ID
+    import uuid
+    decision_id = f"SEC-{uuid.uuid4().hex[:8].upper()}"
     
-    # Blocked: action_taken in ["BLOCK_IP", "LOCK_ACCOUNT"]
-    blocked = db.query(models.LoginAttempt).filter(
-        models.LoginAttempt.action_taken.in_(BLOCKED_ACTIONS)
-    ).count()
-    
-    # Active incidents: status == OPEN
-    active_incidents = db.query(models.SecurityIncident).filter(
-        models.SecurityIncident.status == "OPEN"
-    ).count()
+    if severity:
+        # Create an Incident and Alert for Suspicious/High Risk transactions
+        description = f"Transaction of ${amount} for user {user_id} flagged as {decision}. Reasons: {', '.join(reasons)}"
+        
+        incident = models.SecurityIncident(
+            login_attempt_id=None,
+            threat_type="HIGH_RISK_TRANSACTION",
+            username=user_id,
+            ip_address=None,
+            severity=severity,
+            description=description,
+            prevention_action=action,
+            status="OPEN"
+        )
+        db.add(incident)
+        
+        alert = models.Alert(
+            type=severity,
+            message=f"High Risk Transaction: {description}"
+        )
+        db.add(alert)
+        db.commit()
     
     return {
+        "security_decision_id": decision_id,
+        "decision": decision,
+        "recommended_action": action,
+        "risk_score": risk_score,
+        "reasons": reasons
+    }
+
+
+@app.get("/api/dashboard/summary")
+def get_dashboard_summary(
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(auth.require_admin),
+    start_date: str = None,
+    end_date: str = None
+):
+    BLOCKED_ACTIONS = ["ACCOUNT_LOCKED", "BLOCK_IP", "BLOCKED_AND_DENIED"]
+    
+    query = db.query(models.LoginAttempt)
+    incident_query = db.query(models.SecurityIncident)
+    
+    if start_date:
+        from dateutil.parser import parse
+        try:
+            sd = parse(start_date)
+            query = query.filter(models.LoginAttempt.created_at >= sd)
+            incident_query = incident_query.filter(models.SecurityIncident.created_at >= sd)
+        except: pass
+    if end_date:
+        from dateutil.parser import parse
+        try:
+            ed = parse(end_date)
+            query = query.filter(models.LoginAttempt.created_at <= ed)
+            incident_query = incident_query.filter(models.SecurityIncident.created_at <= ed)
+        except: pass
+        
+    total = query.count()
+    allowed = query.filter(models.LoginAttempt.action_taken == "ALLOWED").count()
+    denied = query.filter(models.LoginAttempt.action_taken == "DENIED").count()
+    blocked = query.filter(models.LoginAttempt.action_taken.in_(BLOCKED_ACTIONS)).count()
+    suspicious = query.filter(models.LoginAttempt.action_taken == "FLAG_SUSPICIOUS").count()
+    
+    active_incidents = incident_query.filter(models.SecurityIncident.status.in_(["OPEN", "INVESTIGATING"])).count()
+    open_incidents = active_incidents
+    resolved_incidents = incident_query.filter(models.SecurityIncident.status == "RESOLVED").count()
+
+    successful_logins = query.filter(models.LoginAttempt.successful_login == True).count()
+    failed_attempts = query.filter(models.LoginAttempt.successful_login == False).count()
+
+    return {
         "total_attempts": total,
-        "normal_logins": normal,
-        "suspicious_logins": suspicious,
-        "blocked_attempts": blocked,
-        "active_incidents": active_incidents
+        "allowed_logins": allowed,
+        "denied_logins": denied,
+        "blocked_logins": blocked,
+        "suspicious_activity": suspicious,
+        "active_incidents": active_incidents,
+        "open_incidents": open_incidents,
+        "resolved_incidents": resolved_incidents,
+        "failed_attempts": failed_attempts,
+        "successful_logins": successful_logins
     }
 
 @app.get("/api/login-attempts")
-def get_login_attempts(db: Session = Depends(get_db)):
+def get_login_attempts(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     return db.query(models.LoginAttempt).order_by(models.LoginAttempt.created_at.desc()).limit(100).all()
 
 @app.get("/api/incidents")
-def get_incidents(db: Session = Depends(get_db)):
+def get_incidents(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     return db.query(models.SecurityIncident).order_by(models.SecurityIncident.created_at.desc()).limit(100).all()
 
 @app.patch("/api/incidents/{incident_id}/resolve")
-def resolve_incident(incident_id: int, db: Session = Depends(get_db)):
+def resolve_incident(incident_id: int, db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     incident = db.query(models.SecurityIncident).filter(models.SecurityIncident.id == incident_id).first()
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found.")
@@ -260,7 +294,7 @@ def resolve_incident(incident_id: int, db: Session = Depends(get_db)):
     return {"status": "success", "message": f"Incident {incident_id} resolved.", "incident": incident}
 
 @app.post("/api/incidents/resolve-all")
-def resolve_all_incidents(db: Session = Depends(get_db)):
+def resolve_all_incidents(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     open_incidents = db.query(models.SecurityIncident).filter(models.SecurityIncident.status == "OPEN").all()
     for inc in open_incidents:
         inc.status = "RESOLVED"
@@ -269,11 +303,11 @@ def resolve_all_incidents(db: Session = Depends(get_db)):
     return {"status": "success", "message": f"Resolved {len(open_incidents)} incidents."}
 
 @app.get("/api/alerts")
-def get_alerts(db: Session = Depends(get_db)):
+def get_alerts(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     return db.query(models.Alert).order_by(models.Alert.created_at.desc()).limit(50).all()
 
 @app.get("/api/prevention/status")
-def get_prevention_status(db: Session = Depends(get_db)):
+def get_prevention_status(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     locked = db.query(models.AccountLock).all()
     blocked = db.query(models.BlockedIP).all()
     return {
@@ -310,7 +344,7 @@ class LockAccountRequest(BaseModel):
     reason: str = "Manually locked by administrator"
 
 @app.post("/api/prevention/lock-account")
-def lock_account_manual(req: LockAccountRequest, db: Session = Depends(get_db)):
+def lock_account_manual(req: LockAccountRequest, db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     existing = db.query(models.AccountLock).filter(models.AccountLock.user_id == req.user_id).first()
     if existing:
         raise HTTPException(status_code=409, detail=f"Account {req.user_id} is already locked.")
@@ -352,7 +386,7 @@ def block_ip_manual(req: BlockIPRequest, db: Session = Depends(get_db)):
     return {"status": "success", "message": f"IP {req.ip_address} blocked."}
 
 @app.get("/api/model/metrics")
-def get_model_metrics():
+def get_model_metrics(current_user: models.User = Depends(auth.require_admin)):
     metadata_path = os.path.join(os.path.dirname(__file__), "..", "models", "model_metadata.json")
     if os.path.exists(metadata_path):
         with open(metadata_path, 'r') as f:
@@ -365,22 +399,22 @@ def get_model_metrics():
 # ════════════════════════════════════════════════════════════════════
 
 @app.get("/api/threat/prediction")
-def get_threat_prediction(db: Session = Depends(get_db)):
+def get_threat_prediction(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     """Sequence-based AI threat prediction from recent login events."""
     return threat_intel.get_threat_prediction(db)
 
 @app.get("/api/threat/risk-scores")
-def get_risk_scores(db: Session = Depends(get_db)):
+def get_risk_scores(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     """Entity risk scores for users and IPs over the last 7 days."""
     return threat_intel.get_entity_risk_scores(db)
 
 @app.get("/api/threat/attack-paths")
-def get_attack_paths(db: Session = Depends(get_db)):
+def get_attack_paths(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     """Attack path graph nodes, edges, and incident chains."""
     return threat_intel.get_attack_paths(db)
 
 @app.post("/api/threat/explain")
-def explain_prediction_endpoint(request: schemas.LoginRequest):
+def explain_prediction_endpoint(request: schemas.LoginRequest, current_user: models.User = Depends(auth.require_admin)):
     """Explain an ML prediction with ranked feature contributions."""
     data = request.model_dump()
     ml_result = ml_service.analyze_login(data)
@@ -401,17 +435,17 @@ def explain_prediction_endpoint(request: schemas.LoginRequest):
 # ════════════════════════════════════════════════════════════════════
 
 @app.get("/api/ueba/anomalies")
-def get_ueba_anomalies(db: Session = Depends(get_db)):
+def get_ueba_anomalies(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     """All users with behavioural anomalies in the last 24 hours."""
     return ueba.get_all_anomalies(db)
 
 @app.get("/api/ueba/baseline/{user_id}")
-def get_ueba_baseline(user_id: str, db: Session = Depends(get_db)):
+def get_ueba_baseline(user_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     """Behavioural baseline for a specific user."""
     return ueba.get_user_baseline(db, user_id)
 
 @app.get("/api/ueba/user/{user_id}")
-def get_ueba_user_report(user_id: str, db: Session = Depends(get_db)):
+def get_ueba_user_report(user_id: str, db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     """Full UEBA report for a specific user (baseline + recent events + anomalies)."""
     return ueba.get_user_ueba_report(db, user_id)
 
@@ -424,8 +458,83 @@ class PhishingRequest(BaseModel):
     email_text: str
 
 @app.post("/api/phishing/analyze")
-def analyze_phishing(req: PhishingRequest):
+def analyze_phishing(req: PhishingRequest, current_user: models.User = Depends(auth.require_admin)):
     """Heuristic phishing analysis — fully offline."""
     return phishing.analyze_email(req.email_text)
 
+# --------------------------------------------------------------------
+# NEW FEATURES: AUDIT, DEMO, EXPORT
+# --------------------------------------------------------------------
 
+@app.get("/api/audit-logs")
+def get_audit_logs(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
+    return db.query(models.AuditLog).order_by(models.AuditLog.created_at.desc()).limit(100).all()
+
+import io
+from fastapi.responses import StreamingResponse
+
+@app.get("/api/export/logins")
+def export_logins(db: Session = Depends(get_db)):
+    logins = db.query(models.LoginAttempt).order_by(models.LoginAttempt.created_at.desc()).all()
+    output = io.StringIO()
+    output.write("id,user_id,ip_address,prediction,action_taken,risk_score,successful_login,created_at\n")
+    for log in logins:
+        output.write(f"{log.id},{log.user_id},{log.ip_address},{log.prediction},{log.action_taken},{log.risk_score},{log.successful_login},{log.created_at}\n")
+    response = StreamingResponse(iter([output.getvalue()]), media_type="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=logins_export.csv"
+    return response
+
+@app.get("/api/export/incidents")
+def export_incidents(db: Session = Depends(get_db)):
+    incidents = db.query(models.SecurityIncident).order_by(models.SecurityIncident.created_at.desc()).all()
+    output = io.StringIO()
+    output.write("id,threat_type,username,ip_address,severity,status,created_at\n")
+    for inc in incidents:
+        output.write(f"{inc.id},{inc.threat_type},{inc.username},{inc.ip_address},{inc.severity},{inc.status},{inc.created_at}\n")
+    response = StreamingResponse(iter([output.getvalue()]), media_type="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=incidents_export.csv"
+    return response
+
+@app.get("/api/export/audit-logs")
+def export_audit_logs(db: Session = Depends(get_db)):
+    logs = db.query(models.AuditLog).order_by(models.AuditLog.created_at.desc()).all()
+    output = io.StringIO()
+    output.write("id,action,target_entity,admin_id,description,created_at\n")
+    for log in logs:
+        output.write(f"{log.id},{log.action},{log.target_entity},{log.admin_id},{log.description},{log.created_at}\n")
+    response = StreamingResponse(iter([output.getvalue()]), media_type="text/csv")
+    response.headers["Content-Disposition"] = "attachment; filename=audit_logs_export.csv"
+    return response
+
+import sys
+import subprocess
+
+class DemoScenarioRequest(BaseModel):
+    scenario: str
+
+@app.post("/api/demo/scenario")
+def trigger_demo_scenario(req: DemoScenarioRequest, db: Session = Depends(get_db)):
+    audit = models.AuditLog(action="DEMO_SCENARIO", target_entity="System", admin_id="admin", description=f"Triggered scenario: {req.scenario}")
+    db.add(audit)
+    db.commit()
+    
+    script_path = os.path.join(os.path.dirname(__file__), "..", "scripts", "simulate.py")
+    # Run synchronously so the frontend loading spinner reflects actual progress
+    subprocess.run([sys.executable, script_path, req.scenario], check=False)
+    
+    return {"status": "success", "message": f"Scenario '{req.scenario}' has successfully completed! Check your dashboards to view the generated data."}
+
+@app.post("/api/demo/reset")
+def reset_demo_data(db: Session = Depends(get_db)):
+    db.query(models.LoginAttempt).delete()
+    db.query(models.SecurityIncident).delete()
+    db.query(models.AccountLock).delete()
+    db.query(models.BlockedIP).delete()
+    db.query(models.AuditLog).delete()
+    db.query(models.Alert).delete()
+    db.commit()
+    
+    audit = models.AuditLog(action="DATABASE_RESET", target_entity="System", admin_id="admin", description="Reset all demo data")
+    db.add(audit)
+    db.commit()
+    return {"status": "success", "message": "Demo data reset successfully. All databases cleared."}

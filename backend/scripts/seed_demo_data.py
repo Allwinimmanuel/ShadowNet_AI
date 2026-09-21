@@ -60,7 +60,7 @@ def seed_data():
                     risk_level="LOW",
                     prediction="NORMAL",
                     attack_type=None,
-                    action_taken="ALLOW_LOGIN",
+                    action_taken="ALLOWED",
                     created_at=attempt_time
                 )
                 db.add(attempt)

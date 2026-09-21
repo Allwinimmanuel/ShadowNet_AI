@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { historyAPI } from '../services/api';
+import { historyAPI, dashboardAPI } from '../services/api';
 import { History, RefreshCw, Clock, Search, ChevronDown } from 'lucide-react';
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -14,24 +14,28 @@ const formatDateTime = (iso) => {
 };
 
 const ACTION_CONFIG = {
-  ALLOW_LOGIN:      { label: 'Allowed',          cls: 'bg-green-900/40 text-green-300 border-green-700'   },
-  DENY_CREDENTIALS: { label: 'Denied',           cls: 'bg-yellow-900/40 text-yellow-300 border-yellow-700' },
-  LOCK_ACCOUNT:     { label: 'Account Locked',   cls: 'bg-red-900/40 text-red-300 border-red-700'         },
-  BLOCK_IP:         { label: 'IP Blocked',       cls: 'bg-red-900/40 text-red-300 border-red-700'         },
-  BLOCK_AND_VERIFY: { label: 'Blocked / Verify', cls: 'bg-red-900/40 text-red-300 border-red-700'         },
+  ALLOWED: { label: 'Allowed', cls: 'bg-green-900/40 text-green-300 border-green-700' },
+  DENIED: { label: 'Denied', cls: 'bg-yellow-900/40 text-yellow-300 border-yellow-700' },
+  FLAG_SUSPICIOUS: { label: 'Flagged', cls: 'bg-orange-900/40 text-orange-300 border-orange-700' },
+  ACCOUNT_LOCKED: { label: 'Account Locked', cls: 'bg-red-900/40 text-red-300 border-red-700' },
+  BLOCK_IP: { label: 'IP Blocked', cls: 'bg-red-900/40 text-red-300 border-red-700' },
+  BLOCKED_AND_DENIED: { label: 'Blocked / Denied', cls: 'bg-red-900/40 text-red-300 border-red-700' },
 };
 
 const PREDICTION_CONFIG = {
-  NORMAL:    { label: 'NORMAL',     cls: 'bg-green-900/40 text-green-300 border-green-700'    },
-  SUSPICIOUS:{ label: 'SUSPICIOUS', cls: 'bg-orange-900/40 text-orange-300 border-orange-700' },
+  NORMAL: { label: 'NORMAL', cls: 'bg-green-900/40 text-green-300 border-green-700' },
+  SUSPICIOUS: { label: 'SUSPICIOUS', cls: 'bg-orange-900/40 text-orange-300 border-orange-700' },
+  BRUTE_FORCE: { label: 'BRUTE_FORCE', cls: 'bg-red-900/40 text-red-300 border-red-700' },
+  BLOCKED_IP: { label: 'BLOCKED_IP', cls: 'bg-red-900/40 text-red-300 border-red-700' },
 };
 
 const ROW_BG = {
-  ALLOW_LOGIN:      '',
-  DENY_CREDENTIALS: 'bg-yellow-950/10',
-  LOCK_ACCOUNT:     'bg-red-950/20',
-  BLOCK_IP:         'bg-red-950/20',
-  BLOCK_AND_VERIFY: 'bg-red-950/20',
+  ALLOWED: '',
+  DENIED: 'bg-yellow-950/10',
+  FLAG_SUSPICIOUS: 'bg-orange-950/10',
+  ACCOUNT_LOCKED: 'bg-red-950/20',
+  BLOCK_IP: 'bg-red-950/20',
+  BLOCKED_AND_DENIED: 'bg-red-950/20',
 };
 
 const Badge = ({ cfg, value }) => {
@@ -43,17 +47,28 @@ const Badge = ({ cfg, value }) => {
 
 // ── Main ─────────────────────────────────────────────────────────────────
 const LoginHistory = () => {
-  const [attempts, setAttempts]   = useState([]);
-  const [loading, setLoading]     = useState(true);
+  const [attempts, setAttempts] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState(null);
-  const [search, setSearch]       = useState('');
+  const [stats, setStats] = useState({
+    total_attempts: 0,
+    allowed_logins: 0,
+    denied_logins: 0,
+    blocked_logins: 0,
+    suspicious_activity: 0
+  });
+  const [search, setSearch] = useState('');
   const [filterAction, setFilterAction] = useState('ALL');
   const [filterPrediction, setFilterPrediction] = useState('ALL');
 
   const fetchHistory = useCallback(async () => {
     try {
-      const data = await historyAPI.getAttempts();
+      const [data, summary] = await Promise.all([
+        historyAPI.getAttempts(),
+        dashboardAPI.getSummary()
+      ]);
       setAttempts(data);
+      setStats(summary);
       setLastRefresh(new Date());
     } catch (err) {
       console.error('LoginHistory fetch error:', err);
@@ -64,7 +79,7 @@ const LoginHistory = () => {
 
   useEffect(() => {
     fetchHistory();
-    const interval = setInterval(fetchHistory, 15000); // refresh every 15 s
+    const interval = setInterval(fetchHistory, 10000); // refresh every 10 s
     return () => clearInterval(interval);
   }, [fetchHistory]);
 
@@ -74,18 +89,11 @@ const LoginHistory = () => {
       || a.user_id?.toLowerCase().includes(search.toLowerCase())
       || a.ip_address?.includes(search);
     const matchAction = filterAction === 'ALL' || a.action_taken === filterAction;
-    const matchPred   = filterPrediction === 'ALL' || a.prediction === filterPrediction;
+    const matchPred = filterPrediction === 'ALL' || a.prediction === filterPrediction;
     return matchSearch && matchAction && matchPred;
   });
 
-  // ── Stats ────────────────────────────────────────────────────────────
-  const stats = {
-    total:     attempts.length,
-    allowed:   attempts.filter(a => a.action_taken === 'ALLOW_LOGIN').length,
-    denied:    attempts.filter(a => a.action_taken === 'DENY_CREDENTIALS').length,
-    blocked:   attempts.filter(a => ['LOCK_ACCOUNT','BLOCK_IP','BLOCK_AND_VERIFY'].includes(a.action_taken)).length,
-    suspicious:attempts.filter(a => a.prediction === 'SUSPICIOUS').length,
-  };
+  // ── Stats from unified backend ────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-5">
@@ -96,7 +104,7 @@ const LoginHistory = () => {
             <History className="text-blue-400 w-6 h-6" />
             Login History
           </h2>
-          <p className="text-slate-500 text-sm mt-0.5">Full audit trail · auto-refreshes every 15 s</p>
+          <p className="text-slate-500 text-sm mt-0.5">Full audit trail · auto-refreshes every 10 s</p>
         </div>
         <div className="flex items-center gap-3">
           {lastRefresh && (
@@ -116,14 +124,14 @@ const LoginHistory = () => {
       {/* Quick stats */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         {[
-          { label: 'Total',      value: stats.total,      cls: 'border-slate-600  text-slate-300'  },
-          { label: 'Allowed',    value: stats.allowed,    cls: 'border-green-700  text-green-400'  },
-          { label: 'Denied',     value: stats.denied,     cls: 'border-yellow-700 text-yellow-400' },
-          { label: 'Blocked',    value: stats.blocked,    cls: 'border-red-700    text-red-400'    },
-          { label: 'Suspicious', value: stats.suspicious, cls: 'border-orange-700 text-orange-400' },
-        ].map(({ label, value, cls }) => (
-          <div key={label} className={`bg-slate-800/60 border ${cls.split(' ')[0]} rounded-xl px-4 py-3 text-center`}>
-            <p className={`text-2xl font-bold tabular-nums ${cls.split(' ')[1]}`}>{value}</p>
+          { label: 'Total', value: stats.total_attempts, border: 'border-slate-600', text: 'text-slate-300' },
+          { label: 'Allowed', value: stats.allowed_logins, border: 'border-green-700', text: 'text-green-400' },
+          { label: 'Denied', value: stats.denied_logins, border: 'border-yellow-700', text: 'text-yellow-400' },
+          { label: 'Blocked', value: stats.blocked_logins, border: 'border-red-700', text: 'text-red-400' },
+          { label: 'Suspicious', value: stats.suspicious_activity, border: 'border-orange-700', text: 'text-orange-400' },
+        ].map(({ label, value, border, text }) => (
+          <div key={label} className={`bg-slate-800/60 border ${border} rounded-xl px-4 py-3 text-center`}>
+            <p className={`text-2xl font-bold tabular-nums ${text}`}>{value}</p>
             <p className="text-xs text-slate-400">{label}</p>
           </div>
         ))}
@@ -149,11 +157,12 @@ const LoginHistory = () => {
             className="appearance-none bg-slate-800 border border-slate-700 text-slate-300 text-xs rounded-lg px-3 py-2 pr-7 focus:outline-none focus:border-blue-500"
           >
             <option value="ALL">All Actions</option>
-            <option value="ALLOW_LOGIN">Allowed</option>
-            <option value="DENY_CREDENTIALS">Denied</option>
-            <option value="LOCK_ACCOUNT">Account Locked</option>
+            <option value="ALLOWED">Allowed</option>
+            <option value="DENIED">Denied</option>
+            <option value="FLAG_SUSPICIOUS">Flagged Suspicious</option>
+            <option value="ACCOUNT_LOCKED">Account Locked</option>
             <option value="BLOCK_IP">IP Blocked</option>
-            <option value="BLOCK_AND_VERIFY">Blocked / Verify</option>
+            <option value="BLOCKED_AND_DENIED">Blocked / Denied</option>
           </select>
           <ChevronDown className="absolute right-2 top-2.5 w-3 h-3 text-slate-400 pointer-events-none" />
         </div>
@@ -167,6 +176,8 @@ const LoginHistory = () => {
             <option value="ALL">All Predictions</option>
             <option value="NORMAL">Normal</option>
             <option value="SUSPICIOUS">Suspicious</option>
+            <option value="BRUTE_FORCE">Brute Force</option>
+            <option value="BLOCKED_IP">Blocked IP</option>
           </select>
           <ChevronDown className="absolute right-2 top-2.5 w-3 h-3 text-slate-400 pointer-events-none" />
         </div>
@@ -222,6 +233,23 @@ const LoginHistory = () => {
                     <td className="px-5 py-3 text-xs text-slate-400">{a.device_type || '—'}</td>
                     <td className="px-5 py-3">
                       <Badge cfg={PREDICTION_CONFIG} value={a.prediction} />
+                      {a.explanation && (
+                        <div className="mt-1 text-xs text-slate-500 italic max-w-[150px] whitespace-normal break-words">
+                          {(() => {
+                            try {
+                              const reasons = JSON.parse(a.explanation);
+                              return reasons.length > 0 ? reasons.join(", ") : "Login behavior matches the user's usual pattern.";
+                            } catch (e) {
+                              return "Login behavior matches the user's usual pattern.";
+                            }
+                          })()}
+                        </div>
+                      )}
+                      {!a.explanation && a.prediction === "NORMAL" && (
+                        <div className="mt-1 text-xs text-slate-500 italic max-w-[150px] whitespace-normal break-words">
+                          Login behavior matches the user's usual pattern.
+                        </div>
+                      )}
                     </td>
                     <td className="px-5 py-3">
                       <div className="flex items-center gap-2">
@@ -247,7 +275,7 @@ const LoginHistory = () => {
         </div>
         {lastRefresh && (
           <div className="px-5 py-2 bg-slate-900/40 border-t border-slate-700 text-xs text-slate-600 flex items-center gap-1">
-            <Clock className="w-3 h-3" /> Last updated {lastRefresh.toLocaleTimeString()} · auto-refreshes every 15 s
+            <Clock className="w-3 h-3" /> Last updated {lastRefresh.toLocaleTimeString()} · auto-refreshes every 10 s
           </div>
         )}
       </div>

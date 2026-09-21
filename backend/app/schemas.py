@@ -23,6 +23,7 @@ class LoginRequest(BaseModel):
     location_changed: int = 0
     account_age_days: int = 30
     previous_successful_logins: int = 10
+    is_password_valid: bool = True
 
 class PredictionResponse(BaseModel):
     prediction: str

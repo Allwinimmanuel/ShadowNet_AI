@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api';
+const API_URL = '/api';
 
 const api = axios.create({
   baseURL: API_URL,
@@ -9,6 +9,17 @@ const api = axios.create({
   },
   timeout: 10000,
 });
+
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
 
 export const authAPI = {
   analyze: async (data) => {
@@ -22,9 +33,12 @@ export const authAPI = {
 };
 
 export const dashboardAPI = {
-  getSummary: async () => {
+  getSummary: async (start_date, end_date) => {
     try {
-      const response = await api.get('/dashboard/summary');
+      const params = {};
+      if (start_date) params.start_date = start_date;
+      if (end_date) params.end_date = end_date;
+      const response = await api.get('/dashboard/summary', { params });
       return response.data;
     } catch (error) {
       throw handleError(error);
@@ -41,9 +55,12 @@ export const historyAPI = {
       throw handleError(error);
     }
   },
-  getIncidents: async () => {
+  getIncidents: async (start_date, end_date) => {
     try {
-      const response = await api.get('/incidents');
+      const params = {};
+      if (start_date) params.start_date = start_date;
+      if (end_date) params.end_date = end_date;
+      const response = await api.get('/incidents', { params });
       return response.data;
     } catch (error) {
       throw handleError(error);
@@ -163,6 +180,30 @@ export const phishingAPI = {
 };
 
 
+
+export const auditAPI = {
+  getLogs: async () => {
+    try { return (await api.get('/audit-logs')).data; }
+    catch (e) { throw handleError(e); }
+  }
+};
+
+export const demoAPI = {
+  triggerScenario: async (scenario) => {
+    try { return (await api.post('/demo/scenario', { scenario })).data; }
+    catch (e) { throw handleError(e); }
+  },
+  resetData: async () => {
+    try { return (await api.post('/demo/reset')).data; }
+    catch (e) { throw handleError(e); }
+  }
+};
+
+export const exportAPI = {
+  getLoginsUrl: () => `${API_URL}/export/logins`,
+  getIncidentsUrl: () => `${API_URL}/export/incidents`,
+  getAuditLogsUrl: () => `${API_URL}/export/audit-logs`
+};
 
 const handleError = (error) => {
   if (error.response) {

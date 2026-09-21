@@ -63,7 +63,7 @@ def get_threat_prediction(db: Session) -> dict:
     # ── Feature extraction ─────────────────────────────────────────────
     total            = len(attempts)
     failed           = sum(1 for a in attempts if not a.successful_login)
-    blocked          = sum(1 for a in attempts if a.action_taken in ("BLOCK_IP", "LOCK_ACCOUNT", "BLOCK_AND_VERIFY"))
+    blocked          = sum(1 for a in attempts if a.action_taken in ("BLOCK_IP", "ACCOUNT_LOCKED", "BLOCKED_AND_DENIED"))
     suspicious_count = sum(1 for a in attempts if a.prediction == "SUSPICIOUS")
     unique_users     = len({a.user_id for a in attempts if a.user_id})
     unique_ips       = len({a.ip_address for a in attempts if a.ip_address})
@@ -186,7 +186,7 @@ def get_entity_risk_scores(db: Session) -> dict:
             return 0.0
         risks = [r.risk_score or 0 for r in records]
         failed = sum(1 for r in records if not r.successful_login)
-        blocked = sum(1 for r in records if r.action_taken in ("BLOCK_IP","LOCK_ACCOUNT","BLOCK_AND_VERIFY"))
+        blocked = sum(1 for r in records if r.action_taken in ("BLOCK_IP","ACCOUNT_LOCKED","BLOCKED_AND_DENIED"))
         base = statistics.mean(risks) if risks else 0
         penalty = min(40, failed * 3 + blocked * 10)
         return round(min(100, base + penalty), 1)
@@ -199,7 +199,7 @@ def get_entity_risk_scores(db: Session) -> dict:
             "severity": _severity(score_entity(recs)),
             "total_attempts": len(recs),
             "failed": sum(1 for r in recs if not r.successful_login),
-            "blocked": sum(1 for r in recs if r.action_taken in ("BLOCK_IP","LOCK_ACCOUNT","BLOCK_AND_VERIFY")),
+            "blocked": sum(1 for r in recs if r.action_taken in ("BLOCK_IP","ACCOUNT_LOCKED","BLOCKED_AND_DENIED")),
         }
         for uid, recs in sorted(user_data.items(), key=lambda x: -score_entity(x[1]))
     ]
@@ -212,7 +212,7 @@ def get_entity_risk_scores(db: Session) -> dict:
             "severity": _severity(score_entity(recs)),
             "total_attempts": len(recs),
             "failed": sum(1 for r in recs if not r.successful_login),
-            "blocked": sum(1 for r in recs if r.action_taken in ("BLOCK_IP","LOCK_ACCOUNT","BLOCK_AND_VERIFY")),
+            "blocked": sum(1 for r in recs if r.action_taken in ("BLOCK_IP","ACCOUNT_LOCKED","BLOCKED_AND_DENIED")),
         }
         for ip, recs in sorted(ip_data.items(), key=lambda x: -score_entity(x[1]))
     ]
@@ -276,16 +276,16 @@ def get_attack_paths(db: Session) -> dict:
 
         if ipid:
             add_node(ipid, a.ip_address or "Unknown IP", "ip", risk,
-                     "blocked" if action in ("BLOCK_IP","BLOCK_AND_VERIFY") else "suspicious")
+                     "blocked" if action in ("BLOCK_IP","BLOCKED_AND_DENIED") else "suspicious")
             add_edge("internet", ipid, "origin", "high" if risk > 70 else "medium")
             add_edge(ipid, "firewall", "probe", "high" if risk > 70 else "medium")
 
         if uid:
             add_node(uid, a.user_id or "Unknown User", "user", risk,
-                     "locked" if action == "LOCK_ACCOUNT" else ("suspicious" if risk > 50 else "active"))
+                     "locked" if action == "ACCOUNT_LOCKED" else ("suspicious" if risk > 50 else "active"))
             if ipid:
                 add_edge(ipid, uid, "login attempt", "high" if risk > 70 else "medium")
-            if action == "ALLOW_LOGIN":
+            if action == "ALLOWED":
                 add_edge(uid, "auth_server", "authenticated", "low")
                 add_edge(uid, "app_server", "access", "medium")
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import api from '../services/api';
+import { threatAPI } from '../services/api';
 import {
   Brain, ShieldAlert, RefreshCw, TrendingUp, Users, Wifi,
   CheckCircle, AlertTriangle, Zap, Info, ChevronRight, BarChart2
@@ -52,8 +52,8 @@ const ThreatIntelligence = () => {
   const fetchAll = useCallback(async () => {
     try {
       const [pred, scores] = await Promise.all([
-        api.get('/threat/prediction').then(r => r.data),
-        api.get('/threat/risk-scores').then(r => r.data),
+        threatAPI.getPrediction(),
+        threatAPI.getRiskScores(),
       ]);
       setPrediction(pred);
       setRiskScores(scores);
