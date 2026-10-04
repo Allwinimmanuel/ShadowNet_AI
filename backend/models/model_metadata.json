@@ -1,6 +1,6 @@
 {
     "model_name": "RandomForestClassifier",
-    "training_date": "2026-09-17T11:33:36.496669",
+    "training_date": "2026-10-03T14:42:03.796678",
     "numeric_features": [
         "login_hour",
         "day_of_week",
@@ -20,23 +20,10 @@
         "location"
     ],
     "metrics": {
-        "accuracy": 0.985,
-        "precision": 0.972,
-        "recall": 0.968,
-        "f1_score": 0.970
+        "accuracy": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1_score": 1.0
     },
-    "feature_importance": {
-        "failed_attempts": 0.35,
-        "is_new_ip": 0.25,
-        "is_new_device": 0.15,
-        "location_changed": 0.10,
-        "login_frequency": 0.08,
-        "time_since_last_login": 0.04,
-        "login_hour": 0.03
-    },
-    "confusion_matrix": [
-        [15420, 15],
-        [8, 1250]
-    ],
     "threshold": 0.5
 }

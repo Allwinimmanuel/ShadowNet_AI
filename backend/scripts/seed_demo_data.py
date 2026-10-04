@@ -26,6 +26,7 @@ def seed_data():
                 user_id="U1001",
                 username="USR001",
                 password_hash=get_password_hash("Demo@123"),
+                role="ADMIN",
                 status="ACTIVE"
             )
             db.add(user)

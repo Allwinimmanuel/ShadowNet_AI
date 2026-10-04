@@ -42,20 +42,30 @@ async def login(request: schemas.SimpleLoginRequest, db: Session = Depends(get_d
         password_valid = True
 
     # 1. Prepare Security Context
+    ip_addr = request.ip_address or "192.168.1.100"
+    dev_type = request.device_type or "Desktop"
+    browser_type = request.browser or "Chrome"
+    loc = request.location or "New York, USA"
+    hour = request.login_hour if request.login_hour is not None else datetime.now().hour
+
+    is_new_ip = 1 if (request.ip_address and request.ip_address != "192.168.1.100") else 0
+    is_new_device = 1 if (request.device_type and request.device_type != "Desktop") else 0
+    location_changed = 1 if (request.location and request.location != "New York, USA") else 0
+
     security_context = {
         "user_id": request.username,
         "email": f"{request.username}@securebank.com",
-        "ip_address": "127.0.0.1",
-        "device_type": "Desktop",
-        "browser": "Chrome",
-        "location": "Unknown",
-        "login_hour": datetime.now().hour,
+        "ip_address": ip_addr,
+        "device_type": dev_type,
+        "browser": browser_type,
+        "location": loc,
+        "login_hour": hour,
         "day_of_week": datetime.now().weekday(),
         "failed_attempts": 0 if password_valid else 1,
         "login_frequency": 1,
-        "is_new_ip": 0,
-        "is_new_device": 0,
-        "location_changed": 0,
+        "is_new_ip": is_new_ip,
+        "is_new_device": is_new_device,
+        "location_changed": location_changed,
         "is_password_valid": password_valid
     }
 

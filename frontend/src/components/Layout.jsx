@@ -20,6 +20,7 @@ const NAV_SECTIONS = [
     items: [
       { to: '/threat',       icon: Brain,       label: 'Threat Intelligence' },
       { to: '/ueba',         icon: UserCheck,   label: 'Behavior Analytics' },
+      { to: '/user-risk',    icon: UserCheck,   label: 'User Risk Profile' },
       { to: '/attack-paths', icon: Network,     label: 'Attack Paths' },
     ],
   },

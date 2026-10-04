@@ -14,6 +14,11 @@ class UserCreate(UserBase):
 class SimpleLoginRequest(BaseModel):
     username: str
     password: str
+    ip_address: Optional[str] = None
+    device_type: Optional[str] = None
+    browser: Optional[str] = None
+    location: Optional[str] = None
+    login_hour: Optional[int] = None
 
 class Token(BaseModel):
     access_token: str

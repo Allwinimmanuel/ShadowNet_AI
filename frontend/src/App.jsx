@@ -23,6 +23,7 @@ import ModelEvaluation from './pages/ModelEvaluation';
 import DemoManager from './pages/DemoManager';
 import Reports from './pages/Reports';
 import Unauthorized from './pages/Unauthorized';
+import UserRiskProfile from './pages/UserRiskProfile';
 
 function App() {
   return (
@@ -43,6 +44,7 @@ function App() {
             {/* New routes */}
             <Route path="threat" element={<ThreatIntelligence />} />
             <Route path="ueba" element={<UEBADashboard />} />
+            <Route path="user-risk" element={<UserRiskProfile />} />
             <Route path="attack-paths" element={<AttackPathVisualization />} />
             <Route path="phishing" element={<PhishingAnalyzer />} />
             <Route path="ransomware" element={<RansomwareMonitor />} />

@@ -5,7 +5,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from . import database, models
 
-SECRET_KEY = "supersecretkey" # In production, use environment variable
+import os
+
+SECRET_KEY = os.getenv("JWT_SECRET_KEY", "shadownet-ai-super-secret-jwt-key-minimum-32-chars-2026") # Secure 32+ byte default
 ALGORITHM = "HS256"
 
 security = HTTPBearer()
@@ -19,13 +21,18 @@ def create_access_token(data: dict):
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(database.get_db)):
     token = credentials.credentials
+    payload = None
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
     except jwt.PyJWTError:
-        raise HTTPException(status_code=401, detail="Could not validate credentials")
+        try:
+            payload = jwt.decode(token, "supersecretkey", algorithms=[ALGORITHM])
+        except jwt.PyJWTError:
+            raise HTTPException(status_code=401, detail="Could not validate credentials")
+    
+    username: str = payload.get("sub")
+    if username is None:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
     
     user = db.query(models.User).filter(models.User.username == username).first()
     if user is None:

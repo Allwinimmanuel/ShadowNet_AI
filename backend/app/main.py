@@ -65,29 +65,198 @@ def health_check(db: Session = Depends(get_db)):
 
 @app.post("/api/auth/login")
 def login(request_data: schemas.SimpleLoginRequest, req: Request, db: Session = Depends(get_db)):
-    # 1. Fetch user
+    client_ip = req.client.host if req.client else "127.0.0.1"
+    if client_ip in ["testclient", "localhost"]:
+        client_ip = "127.0.0.1"
+    user_agent = req.headers.get("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0")
+
+    # 1. Existing Account Lock check
+    locked_account = db.query(models.AccountLock).filter(models.AccountLock.user_id == request_data.username).first()
+    if locked_account:
+        return {
+            "success": False,
+            "prediction": "BRUTE_FORCE",
+            "action": "ACCOUNT_LOCKED",
+            "risk_score": 100.0,
+            "message": "Your account has been temporarily locked due to multiple failed login attempts.",
+            "reasons": ["Account is locked because of repeated failed login attempts."]
+        }
+
+    # 2. Existing IP Block check
+    blocked_ip = db.query(models.BlockedIP).filter(models.BlockedIP.ip_address == client_ip).first()
+    if blocked_ip:
+        return {
+            "success": False,
+            "prediction": "BLOCKED_IP",
+            "action": "BLOCKED_AND_DENIED",
+            "risk_score": 100.0,
+            "message": "This network address has been temporarily blocked.",
+            "reasons": ["Login denied because the IP address is blocked."]
+        }
+
+    # 3. Calculate consecutive failed attempts from recent history
+    time_limit = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15)
+    recent_attempts = db.query(models.LoginAttempt).filter(
+        models.LoginAttempt.user_id == request_data.username,
+        models.LoginAttempt.created_at >= time_limit
+    ).order_by(models.LoginAttempt.created_at.desc()).all()
+
+    consecutive_failed = 0
+    for att in recent_attempts:
+        if att.successful_login:
+            break
+        consecutive_failed += 1
+
+    # 4. Check user & password
     user = db.query(models.User).filter(models.User.username == request_data.username).first()
-    if not user:
-        return {"success": False, "message": "Invalid username or password."}
-        
-    password_valid = bcrypt.checkpw(request_data.password.encode('utf-8'), user.password_hash.encode('utf-8'))
-    
+    password_valid = False
+    if user and user.password_hash:
+        try:
+            password_valid = bcrypt.checkpw(request_data.password.encode('utf-8'), user.password_hash.encode('utf-8'))
+        except Exception:
+            password_valid = False
+
     if not password_valid:
-        return {"success": False, "message": "Invalid username or password."}
-        
+        new_failed_count = consecutive_failed + 1
+        if new_failed_count >= 5:
+            # Enforce Account Lockout
+            lock = models.AccountLock(user_id=request_data.username, reason="Exceeded maximum failed attempts.")
+            db.add(lock)
+            prevention.create_incident(db, None, "BRUTE_FORCE", "HIGH", f"User {request_data.username} exceeded maximum failed login attempts.", "ACCOUNT_LOCKED", username=request_data.username, ip_address=client_ip)
+            
+            db_attempt = models.LoginAttempt(
+                user_id=request_data.username,
+                ip_address=client_ip,
+                device_type="Desktop",
+                browser="Chrome",
+                location="Unknown",
+                login_hour=datetime.datetime.now().hour,
+                successful_login=False,
+                failed_attempts=new_failed_count,
+                risk_score=95.0,
+                prediction="BRUTE_FORCE",
+                action_taken="ACCOUNT_LOCKED",
+                explanation=json.dumps(["Exceeded maximum failed attempts."])
+            )
+            db.add(db_attempt)
+            db.commit()
+            return {
+                "success": False,
+                "prediction": "BRUTE_FORCE",
+                "action": "ACCOUNT_LOCKED",
+                "risk_score": 95.0,
+                "message": "Your account has been temporarily locked due to multiple failed login attempts.",
+                "reasons": ["Exceeded maximum failed attempts (5). Account locked."]
+            }
+        else:
+            db_attempt = models.LoginAttempt(
+                user_id=request_data.username,
+                ip_address=client_ip,
+                device_type="Desktop",
+                browser="Chrome",
+                location="Unknown",
+                login_hour=datetime.datetime.now().hour,
+                successful_login=False,
+                failed_attempts=new_failed_count,
+                risk_score=min(85.0, 25.0 + new_failed_count * 15.0),
+                prediction="SUSPICIOUS" if new_failed_count >= 3 else "NORMAL",
+                action_taken="DENIED",
+                explanation=json.dumps(["Invalid credentials provided."])
+            )
+            db.add(db_attempt)
+            db.commit()
+            return {
+                "success": False,
+                "prediction": "SUSPICIOUS" if new_failed_count >= 3 else "NORMAL",
+                "action": "DENIED",
+                "risk_score": min(85.0, 25.0 + new_failed_count * 15.0),
+                "message": "Invalid username or password.",
+                "reasons": ["Invalid credentials provided."]
+            }
+
+    # 5. Password is valid! Run context analysis
+    login_req = schemas.LoginRequest(
+        user_id=user.username,
+        email=f"{user.username.lower()}@demo.com",
+        ip_address=client_ip,
+        device_type="Desktop",
+        browser="Chrome",
+        location="Unknown",
+        login_hour=datetime.datetime.now().hour,
+        day_of_week=datetime.datetime.now().weekday(),
+        failed_attempts=consecutive_failed,
+        login_frequency=1,
+        is_password_valid=True
+    )
+    
+    action, prediction, risk_score, reasons = prevention.evaluate_and_prevent(
+        db=db,
+        request=login_req,
+        prediction="NORMAL",
+        risk_score=0.0,
+        reasons=[]
+    )
+
+    if action in ["ACCOUNT_LOCKED", "BLOCK_IP", "BLOCKED_AND_DENIED"]:
+        db_attempt = models.LoginAttempt(
+            user_id=user.username,
+            ip_address=client_ip,
+            device_type="Desktop",
+            browser="Chrome",
+            location="Unknown",
+            login_hour=login_req.login_hour,
+            successful_login=False,
+            failed_attempts=consecutive_failed,
+            risk_score=risk_score,
+            prediction=prediction,
+            action_taken=action,
+            explanation=json.dumps(reasons)
+        )
+        db.add(db_attempt)
+        db.commit()
+        return {
+            "success": False,
+            "prediction": prediction,
+            "action": action,
+            "risk_score": risk_score,
+            "reasons": reasons,
+            "message": "Login blocked by security policy."
+        }
+
+    # Success!
     access_token = auth.create_access_token(data={"sub": user.username, "role": user.role})
+    db_attempt = models.LoginAttempt(
+        user_id=user.username,
+        ip_address=client_ip,
+        device_type="Desktop",
+        browser="Chrome",
+        location="Unknown",
+        login_hour=login_req.login_hour,
+        successful_login=True,
+        failed_attempts=0,
+        risk_score=risk_score,
+        prediction=prediction,
+        action_taken=action,
+        explanation=json.dumps(reasons)
+    )
+    db.add(db_attempt)
+    db.commit()
 
     return {
         "success": True,
         "message": "Login successful.",
         "user_id": user.user_id,
-        "token": access_token
+        "token": access_token,
+        "prediction": prediction,
+        "action": action,
+        "risk_score": risk_score,
+        "reasons": reasons
     }
 
 @app.post("/api/auth/analyze", response_model=schemas.PredictionResponse)
 def analyze_login(request: schemas.LoginRequest, db: Session = Depends(get_db)):
     # Calculate consecutive failed attempts from history
-    time_limit = datetime.datetime.utcnow() - datetime.timedelta(minutes=15)
+    time_limit = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15)
     recent_attempts = db.query(models.LoginAttempt).filter(
         models.LoginAttempt.user_id == request.user_id,
         models.LoginAttempt.created_at >= time_limit
@@ -99,25 +268,18 @@ def analyze_login(request: schemas.LoginRequest, db: Session = Depends(get_db)):
             break
         true_failed_attempts += 1
         
-    # Override request failed attempts with the true historical count
-    request.failed_attempts = true_failed_attempts
+    if request.failed_attempts == 0 and true_failed_attempts > 0:
+        request.failed_attempts = true_failed_attempts
 
-    # 1. Get ML Prediction
+    # 1. Get ML Prediction & Baseline
     ml_result = ml_service.analyze_login(request.model_dump())
     
-    # Pre-adjust risk score for bad passwords BEFORE prevention engine
-    adjusted_risk_score = ml_result["risk_score"]
-    if not request.is_password_valid:
-        adjusted_risk_score = min(100.0, adjusted_risk_score + 25.0)
-        if "Invalid password" not in ml_result["reasons"]:
-            ml_result["reasons"].append("Invalid password")
-    
-    # 2. Apply Prevention Rules
+    # 2. Apply Prevention & Risk Fusion Rules
     action, prediction, risk_score, reasons = prevention.evaluate_and_prevent(
         db=db, 
         request=request, 
         prediction=ml_result["prediction"], 
-        risk_score=adjusted_risk_score, 
+        risk_score=ml_result["risk_score"], 
         reasons=ml_result["reasons"]
     )
     
@@ -147,8 +309,8 @@ def analyze_login(request: schemas.LoginRequest, db: Session = Depends(get_db)):
     return schemas.PredictionResponse(
         prediction=prediction,
         risk_score=risk_score,
-        confidence=ml_result["confidence"],
-        reasons=ml_result["reasons"],
+        confidence=ml_result.get("confidence", 0.85),
+        reasons=reasons,
         recommended_action=action
     )
 
@@ -293,6 +455,28 @@ def resolve_incident(incident_id: int, db: Session = Depends(get_db), current_us
     db.refresh(incident)
     return {"status": "success", "message": f"Incident {incident_id} resolved.", "incident": incident}
 
+class IncidentStatusUpdate(BaseModel):
+    status: str
+
+@app.patch("/api/incidents/{incident_id}/status")
+def update_incident_status(incident_id: int, req: IncidentStatusUpdate, db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
+    incident = db.query(models.SecurityIncident).filter(models.SecurityIncident.id == incident_id).first()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found.")
+    incident.status = req.status
+    incident.resolved = (req.status == "RESOLVED")
+    
+    audit = models.AuditLog(
+        action="INCIDENT_STATUS_CHANGE",
+        target_entity=f"Incident #{incident_id}",
+        admin_id=current_user.username if current_user else "admin",
+        description=f"Status changed to {req.status}"
+    )
+    db.add(audit)
+    db.commit()
+    db.refresh(incident)
+    return {"status": "success", "message": f"Incident {incident_id} status updated to {req.status}.", "incident": incident}
+
 @app.post("/api/incidents/resolve-all")
 def resolve_all_incidents(db: Session = Depends(get_db), current_user: models.User = Depends(auth.require_admin)):
     open_incidents = db.query(models.SecurityIncident).filter(models.SecurityIncident.status == "OPEN").all()
@@ -320,24 +504,46 @@ class UnlockRequest(BaseModel):
 
 @app.post("/api/prevention/unlock-account")
 def unlock_account(req: UnlockRequest, db: Session = Depends(get_db)):
-    lock = db.query(models.AccountLock).filter(models.AccountLock.user_id == req.user_id).first()
-    if lock:
-        db.delete(lock)
-        db.commit()
-        return {"status": "success", "message": f"Account {req.user_id} unlocked."}
-    raise HTTPException(status_code=404, detail="Account lock not found.")
+    locks = db.query(models.AccountLock).filter(models.AccountLock.user_id == req.user_id).all()
+    for l in locks:
+        db.delete(l)
+    
+    # Reset recent failed login attempts so consecutive_failed becomes 0
+    recent_fails = db.query(models.LoginAttempt).filter(
+        models.LoginAttempt.user_id == req.user_id,
+        models.LoginAttempt.successful_login == False
+    ).all()
+    for f in recent_fails:
+        f.successful_login = True
+        
+    audit = models.AuditLog(
+        action="ACCOUNT_UNLOCK", 
+        target_entity=req.user_id, 
+        admin_id="admin", 
+        description=f"Unlocked account '{req.user_id}' and reset failed attempt counters."
+    )
+    db.add(audit)
+    db.commit()
+    return {"status": "success", "message": f"Account '{req.user_id}' has been unlocked successfully."}
 
 class UnblockRequest(BaseModel):
     ip_address: str
 
 @app.post("/api/prevention/unblock-ip")
 def unblock_ip(req: UnblockRequest, db: Session = Depends(get_db)):
-    block = db.query(models.BlockedIP).filter(models.BlockedIP.ip_address == req.ip_address).first()
-    if block:
-        db.delete(block)
-        db.commit()
-        return {"status": "success", "message": f"IP {req.ip_address} unblocked."}
-    raise HTTPException(status_code=404, detail="IP block not found.")
+    blocks = db.query(models.BlockedIP).filter(models.BlockedIP.ip_address == req.ip_address).all()
+    for b in blocks:
+        db.delete(b)
+    
+    audit = models.AuditLog(
+        action="IP_UNBLOCK", 
+        target_entity=req.ip_address, 
+        admin_id="admin", 
+        description=f"Unblocked IP address '{req.ip_address}'."
+    )
+    db.add(audit)
+    db.commit()
+    return {"status": "success", "message": f"IP '{req.ip_address}' has been unblocked successfully."}
 
 class LockAccountRequest(BaseModel):
     user_id: str
