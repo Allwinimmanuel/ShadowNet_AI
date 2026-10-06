@@ -63,8 +63,8 @@ def test_1_normal_login():
 def test_2_suspicious_login():
     # To trigger suspicious we can mock the request somehow, or just hit analyze endpoint with suspicious payload
     res = client.post("/api/auth/analyze", json={
-        "user_id": "USR001",
-        "email": "usr001@demo.com",
+        "user_id": "USR002_SUSP",
+        "email": "usr002@demo.com",
         "ip_address": "185.220.101.45",
         "device_type": "Unknown Device",
         "browser": "Unknown Browser",
@@ -84,8 +84,8 @@ def test_2_suspicious_login():
     print("PASS - TEST 2 (SUSPICIOUS LOGIN)")
 
 def test_3_brute_force():
-    # Attempt 5 wrong passwords
-    for i in range(5):
+    # Attempt 4 wrong passwords, 5th triggers lock
+    for i in range(4):
         client.post("/api/auth/login", json={"username": "USR001", "password": "wrongpassword"})
         
     res = client.post("/api/auth/login", json={"username": "USR001", "password": "wrongpassword"})

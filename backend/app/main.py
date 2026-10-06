@@ -99,7 +99,7 @@ def login(request_data: schemas.SimpleLoginRequest, req: Request, db: Session = 
     recent_attempts = db.query(models.LoginAttempt).filter(
         models.LoginAttempt.user_id == request_data.username,
         models.LoginAttempt.created_at >= time_limit
-    ).order_by(models.LoginAttempt.created_at.desc()).all()
+    ).order_by(models.LoginAttempt.id.desc()).all()
 
     consecutive_failed = 0
     for att in recent_attempts:
@@ -148,6 +148,31 @@ def login(request_data: schemas.SimpleLoginRequest, req: Request, db: Session = 
                 "message": "Your account has been temporarily locked due to multiple failed login attempts.",
                 "reasons": ["Exceeded maximum failed attempts (5). Account locked."]
             }
+        elif new_failed_count == 4:
+            db_attempt = models.LoginAttempt(
+                user_id=request_data.username,
+                ip_address=client_ip,
+                device_type="Desktop",
+                browser="Chrome",
+                location="Unknown",
+                login_hour=datetime.datetime.now().hour,
+                successful_login=False,
+                failed_attempts=new_failed_count,
+                risk_score=68.0,
+                prediction="SUSPICIOUS",
+                action_taken="FLAG_SUSPICIOUS",
+                explanation=json.dumps(["Multiple consecutive failed login attempts (4)."])
+            )
+            db.add(db_attempt)
+            db.commit()
+            return {
+                "success": False,
+                "prediction": "SUSPICIOUS",
+                "action": "FLAG_SUSPICIOUS",
+                "risk_score": 68.0,
+                "message": "Suspicious login activity flagged. Invalid credentials.",
+                "reasons": ["Multiple consecutive failed login attempts (4)."]
+            }
         else:
             db_attempt = models.LoginAttempt(
                 user_id=request_data.username,
@@ -158,8 +183,8 @@ def login(request_data: schemas.SimpleLoginRequest, req: Request, db: Session = 
                 login_hour=datetime.datetime.now().hour,
                 successful_login=False,
                 failed_attempts=new_failed_count,
-                risk_score=min(85.0, 25.0 + new_failed_count * 15.0),
-                prediction="SUSPICIOUS" if new_failed_count >= 3 else "NORMAL",
+                risk_score=20.0 + new_failed_count * 5.0,
+                prediction="NORMAL",
                 action_taken="DENIED",
                 explanation=json.dumps(["Invalid credentials provided."])
             )
@@ -167,9 +192,9 @@ def login(request_data: schemas.SimpleLoginRequest, req: Request, db: Session = 
             db.commit()
             return {
                 "success": False,
-                "prediction": "SUSPICIOUS" if new_failed_count >= 3 else "NORMAL",
+                "prediction": "NORMAL",
                 "action": "DENIED",
-                "risk_score": min(85.0, 25.0 + new_failed_count * 15.0),
+                "risk_score": 20.0 + new_failed_count * 5.0,
                 "message": "Invalid username or password.",
                 "reasons": ["Invalid credentials provided."]
             }
@@ -255,21 +280,26 @@ def login(request_data: schemas.SimpleLoginRequest, req: Request, db: Session = 
 
 @app.post("/api/auth/analyze", response_model=schemas.PredictionResponse)
 def analyze_login(request: schemas.LoginRequest, db: Session = Depends(get_db)):
-    # Calculate consecutive failed attempts from history
-    time_limit = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15)
-    recent_attempts = db.query(models.LoginAttempt).filter(
-        models.LoginAttempt.user_id == request.user_id,
-        models.LoginAttempt.created_at >= time_limit
-    ).order_by(models.LoginAttempt.created_at.desc()).all()
-    
-    true_failed_attempts = 0
-    for attempt in recent_attempts:
-        if attempt.successful_login:
-            break
-        true_failed_attempts += 1
+    is_sim = getattr(request, 'dry_run', False)
+
+    # Calculate consecutive failed attempts from history if not isolated simulation
+    if not is_sim:
+        time_limit = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=15)
+        recent_attempts = db.query(models.LoginAttempt).filter(
+            models.LoginAttempt.user_id == request.user_id,
+            models.LoginAttempt.created_at >= time_limit
+        ).order_by(models.LoginAttempt.id.desc()).all()
         
-    if request.failed_attempts == 0 and true_failed_attempts > 0:
-        request.failed_attempts = true_failed_attempts
+        true_failed_attempts = 0
+        for attempt in recent_attempts:
+            if attempt.successful_login:
+                break
+            true_failed_attempts += 1
+            
+        if not request.is_password_valid:
+            request.failed_attempts = true_failed_attempts + 1
+        elif request.failed_attempts == 0 and true_failed_attempts > 0:
+            request.failed_attempts = true_failed_attempts
 
     # 1. Get ML Prediction & Baseline
     ml_result = ml_service.analyze_login(request.model_dump())
@@ -280,31 +310,33 @@ def analyze_login(request: schemas.LoginRequest, db: Session = Depends(get_db)):
         request=request, 
         prediction=ml_result["prediction"], 
         risk_score=ml_result["risk_score"], 
-        reasons=ml_result["reasons"]
+        reasons=ml_result["reasons"],
+        dry_run=is_sim
     )
     
     if not request.is_password_valid and action == "ALLOWED":
         action = "DENIED"
     
-    # 3. Store login attempt
-    db_attempt = models.LoginAttempt(
-        user_id=request.user_id,
-        ip_address=request.ip_address,
-        device_type=request.device_type,
-        browser=request.browser,
-        location=request.location,
-        login_hour=request.login_hour,
-        successful_login=(request.is_password_valid and action == "ALLOWED"),
-        failed_attempts=request.failed_attempts,
-        risk_score=risk_score,
-        prediction=prediction,
-        action_taken=action,
-        explanation=json.dumps(reasons) if reasons else None,
-        model_confidence=ml_result.get("confidence")
-    )
-    db.add(db_attempt)
-    db.commit()
-    db.refresh(db_attempt)
+    # 3. Store login attempt only for live events (NOT simulation)
+    if not is_sim:
+        db_attempt = models.LoginAttempt(
+            user_id=request.user_id,
+            ip_address=request.ip_address,
+            device_type=request.device_type,
+            browser=request.browser,
+            location=request.location,
+            login_hour=request.login_hour,
+            successful_login=(request.is_password_valid and action == "ALLOWED"),
+            failed_attempts=request.failed_attempts,
+            risk_score=risk_score,
+            prediction=prediction,
+            action_taken=action,
+            explanation=json.dumps(reasons) if reasons else None,
+            model_confidence=ml_result.get("confidence")
+        )
+        db.add(db_attempt)
+        db.commit()
+        db.refresh(db_attempt)
     
     return schemas.PredictionResponse(
         prediction=prediction,

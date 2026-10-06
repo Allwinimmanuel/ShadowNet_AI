@@ -136,7 +136,7 @@ const LoginSimulator = () => {
     setError(null);
     setResult(null);
     try {
-      const res = await authAPI.analyze(formData);
+      const res = await authAPI.analyze({ ...formData, dry_run: true });
       setResult(res);
     } catch (err) {
       setError(err.message || 'Analysis request failed');
@@ -438,10 +438,8 @@ const LoginSimulator = () => {
 
               {/* Direct Next Step */}
               <div className="pt-2 border-t border-slate-700/60 flex justify-between items-center text-xs">
-                <span className="text-slate-400">Recorded to database in real-time.</span>
-                <a href="/history" className="text-blue-400 hover:text-blue-300 font-semibold underline">
-                  View in Login History &rarr;
-                </a>
+                <span className="text-slate-400 font-medium">🔬 Simulation Mode: Real-time XAI preview (isolated from Live Monitor).</span>
+                <span className="text-blue-400 font-mono text-[11px]">XAI Engine Verified</span>
               </div>
             </div>
           )}

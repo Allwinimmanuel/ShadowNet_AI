@@ -24,6 +24,7 @@ class LoginRequest(BaseModel):
     account_age_days: int = 30
     previous_successful_logins: int = 10
     is_password_valid: bool = True
+    dry_run: Optional[bool] = False
 
 class PredictionResponse(BaseModel):
     prediction: str

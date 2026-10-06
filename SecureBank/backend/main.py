@@ -99,7 +99,7 @@ async def login(request: schemas.SimpleLoginRequest, db: Session = Depends(get_d
         raise HTTPException(
             status_code=403, 
             detail={
-                "message": "Access denied by security policy.",
+                "message": "Access denied by security policy. Account has been locked due to repeated failed login attempts.",
                 "action": action,
                 "prediction": prediction,
                 "risk_score": risk_score,
@@ -111,19 +111,19 @@ async def login(request: schemas.SimpleLoginRequest, db: Session = Depends(get_d
         raise HTTPException(
             status_code=401, 
             detail={
-                "message": "Invalid username or password.",
-                "action": "DENIED",
+                "message": "Suspicious login attempt flagged. Invalid credentials." if action in ["FLAG_SUSPICIOUS", "SUSPICIOUS"] else "Invalid username or password.",
+                "action": action if action in ["FLAG_SUSPICIOUS", "SUSPICIOUS"] else "DENIED",
                 "prediction": prediction,
                 "risk_score": risk_score,
                 "reasons": reasons
             }
         )
         
-    if action == "HELD" or action == "SUSPICIOUS" or action == "FLAG_SUSPICIOUS":
+    if action in ["HELD", "SUSPICIOUS", "FLAG_SUSPICIOUS"]:
         # Simulate requiring MFA
         return {
             "success": True, 
-            "message": "MFA required.", 
+            "message": "MFA challenge required.", 
             "token": None, 
             "action": action,
             "prediction": prediction,

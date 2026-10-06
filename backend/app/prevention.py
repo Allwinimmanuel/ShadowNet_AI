@@ -5,7 +5,7 @@ import json
 
 from .risk_engine import RiskFusionEngine
 
-def evaluate_and_prevent(db: Session, request: schemas.LoginRequest, prediction: str, risk_score: float, reasons: list):
+def evaluate_and_prevent(db: Session, request: schemas.LoginRequest, prediction: str, risk_score: float, reasons: list, dry_run: bool = False):
     engine = RiskFusionEngine(db)
     req_dict = request.model_dump()
     res = engine.evaluate(req_dict, is_password_valid=request.is_password_valid)
@@ -14,6 +14,9 @@ def evaluate_and_prevent(db: Session, request: schemas.LoginRequest, prediction:
     pred = res["prediction"]
     score = res["final_risk_score"]
     reasons_list = res["reasons"]
+
+    if dry_run or getattr(request, 'dry_run', False):
+        return action, pred, score, reasons_list
 
     # Enforce database actions
     if action == "ACCOUNT_LOCKED":

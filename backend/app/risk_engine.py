@@ -142,22 +142,24 @@ class RiskFusionEngine:
             breakdown.append({
                 "category": "AUTHENTICATION",
                 "signal": "High consecutive failed attempts",
-                "points": 45,
+                "points": 50,
                 "evidence": f"{failed_attempts} consecutive failures recorded"
             })
-        elif failed_attempts >= 3:
-            rule_violations.append("Multiple failed attempts (>= 3)")
+            reasons.append("Exceeded maximum failed attempts (5). Account locked.")
+        elif failed_attempts == 4:
+            rule_violations.append("Multiple failed attempts (4 attempts)")
             breakdown.append({
                 "category": "AUTHENTICATION",
-                "signal": "Repeated failed attempts",
-                "points": 25,
-                "evidence": f"{failed_attempts} failed attempts in sequence"
+                "signal": "Elevated failed attempts threshold",
+                "points": 45,
+                "evidence": "4 consecutive failed login attempts"
             })
-        elif failed_attempts > 0:
+            reasons.append("Multiple consecutive failed login attempts (4).")
+        elif failed_attempts in [1, 2, 3]:
             breakdown.append({
                 "category": "AUTHENTICATION",
-                "signal": "Recent failed attempt",
-                "points": 10 * failed_attempts,
+                "signal": "Failed attempt sequence",
+                "points": 5 * failed_attempts,
                 "evidence": f"{failed_attempts} failed attempt(s)"
             })
 
@@ -165,7 +167,7 @@ class RiskFusionEngine:
             breakdown.append({
                 "category": "CREDENTIALS",
                 "signal": "Invalid password supplied",
-                "points": 25,
+                "points": 15,
                 "evidence": "Supplied credential hash mismatch"
             })
             reasons.append("Invalid credentials provided")
@@ -337,6 +339,10 @@ class RiskFusionEngine:
             final_score = max(final_score, 95.0)
             prediction = "BRUTE_FORCE"
             action = "ACCOUNT_LOCKED"
+        elif failed_attempts == 4:
+            final_score = max(final_score, 68.0)
+            prediction = "SUSPICIOUS"
+            action = "FLAG_SUSPICIOUS"
         elif recent_ip_count >= 10:
             final_score = max(final_score, 90.0)
             prediction = "BLOCKED_IP"
@@ -349,10 +355,10 @@ class RiskFusionEngine:
             final_score = max(final_score, 85.0)
             prediction = "SUSPICIOUS"
             action = "BLOCK_IP"
-        elif final_score >= 70:
+        elif final_score >= 60:
             prediction = "SUSPICIOUS"
             action = "FLAG_SUSPICIOUS" if is_password_valid else "DENIED"
-        elif final_score >= 40:
+        elif final_score >= 45:
             prediction = "SUSPICIOUS"
             action = "FLAG_SUSPICIOUS" if is_password_valid else "DENIED"
         else:
